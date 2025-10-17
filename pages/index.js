@@ -1,67 +1,111 @@
-import React from "react";
-import Link from "next/link";
+import { useState } from "react";
+import { useRouter } from "next/router";
+import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
-import Navbar from "../components/Navbar"; // ✅ import Navbar
 
-export default function Home() {
+export default function HomePage() {
+  const router = useRouter();
+  const [kw, setKw] = useState("");
+
+  const ensureLoginThen = (go) => {
+    const u = JSON.parse(localStorage.getItem("userProfile") || "null");
+    if (!u) {
+      alert("กรุณาเข้าสู่ระบบก่อนทำรายการนี้");
+      router.push("/login");
+      return;
+    }
+    go();
+  };
+
+  const goCreateEvent = () =>
+    ensureLoginThen(() => router.push("/events"));
+
+  const goFindFriends = () => {
+    const q = kw.trim();
+    // ไปหน้า friends พร้อม query ค้นหา (มีไฟล์ friends.js อยู่แล้ว)
+    router.push(q ? `/friends?search=${encodeURIComponent(q)}` : "/friends");
+  };
+
+  const goUpcoming = () => router.push("/events-list");
+
   return (
-    <div className="min-h-screen bg-gradient-to-b from-orange-200 to-blue-100 flex flex-col">
-      {/* Navbar */}
+    <div className="min-h-screen flex flex-col bg-gradient-to-b from-orange-50 to-blue-50 dark:from-gray-900 dark:to-gray-800">
       <Navbar />
 
-      {/* Header */}
-      <header className="text-center py-12">
-        <h1 className="text-5xl font-bold text-orange-600 mb-4">FitNU</h1>
-        <p className="text-lg text-gray-700 max-w-xl mx-auto">
-          หาเพื่อนออกกำลังกายในชั้นปีของคุณ ที่มหาวิทยาลัยนเรศวร
-        </p>
-      </header>
-
-      {/* Main content */}
-      <main className="flex-1 grid gap-6 md:grid-cols-2 lg:grid-cols-3 px-6 sm:px-20">
-        {/* Card 1 */}
-        <div className="bg-white rounded-2xl shadow-lg p-6 flex flex-col justify-between hover:scale-105 transition-transform">
-          <h2 className="text-xl font-semibold mb-4">สร้างกิจกรรม</h2>
-          <p className="text-gray-600 mb-4">
-            จัดตั้งกิจกรรมออกกำลังกายและชวนเพื่อนในชั้นปีของคุณ
+      <main className="flex-1 px-6 py-10">
+        <div className="max-w-5xl mx-auto text-center">
+          <h1 className="text-4xl font-extrabold text-orange-600 dark:text-orange-400">
+            FitNU
+          </h1>
+          <p className="mt-2 text-gray-700 dark:text-gray-300">
+            หาเพื่อนออกกำลังกายในชั้นปีของคุณ ที่มหาวิทยาลัยนเรศวร
           </p>
-          <Link href="/events">
-            <button className="w-full bg-orange-500 text-white py-2 rounded-xl hover:bg-orange-600 transition-colors">
+        </div>
+
+        {/* 3 Cards */}
+        <div className="max-w-6xl mx-auto mt-10 grid gap-6 md:grid-cols-3">
+          {/* Card 1: สร้างกิจกรรม */}
+          <div className="bg-white dark:bg-gray-900/70 rounded-2xl shadow-lg border border-white/60 dark:border-gray-700 p-6 flex flex-col justify-between">
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+                สร้างกิจกรรม
+              </h2>
+              <p className="mt-6 text-gray-600 dark:text-gray-300">
+                จัดตั้งกิจกรรมออกกำลังกายและชวนเพื่อนในชั้นปีของคุณ
+              </p>
+            </div>
+            <button
+              onClick={goCreateEvent}
+              className="mt-8 w-full bg-orange-500 hover:bg-orange-600 text-white font-medium py-3 rounded-xl shadow transition"
+            >
               + สร้างกิจกรรม
             </button>
-          </Link>
-        </div>
+          </div>
 
-        {/* Card 2 */}
-        <div className="bg-white rounded-2xl shadow-lg p-6 flex flex-col justify-between hover:scale-105 transition-transform">
-          <h2 className="text-xl font-semibold mb-4">หาเพื่อนในชั้นปี</h2>
-          <input
-            type="text"
-            placeholder="ค้นหาชื่อหรือความสนใจ"
-            className="mb-4 px-3 py-2 border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400"
-          />
-          <Link href="/friends">
-            <button className="w-full bg-blue-500 text-white py-2 rounded-xl hover:bg-blue-600 transition-colors">
+          {/* Card 2: หาเพื่อนในชั้นปี */}
+          <div className="bg-white dark:bg-gray-900/70 rounded-2xl shadow-lg border border-white/60 dark:border-gray-700 p-6 flex flex-col justify-between">
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+                หาเพื่อนในชั้นปี
+              </h2>
+              <div className="mt-6">
+                <input
+                  value={kw}
+                  onChange={(e) => setKw(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && goFindFriends()}
+                  placeholder="ค้นหาชื่อหรือความสนใจ"
+                  className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white/70 dark:bg-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              </div>
+            </div>
+            <button
+              onClick={goFindFriends}
+              className="mt-8 w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded-xl shadow transition"
+            >
               ค้นหา
             </button>
-          </Link>
-        </div>
+          </div>
 
-        {/* Card 3 */}
-        <div className="bg-white rounded-2xl shadow-lg p-6 flex flex-col justify-between hover:scale-105 transition-transform">
-          <h2 className="text-xl font-semibold mb-4">กิจกรรมที่กำลังมา</h2>
-          <p className="text-gray-600 mb-4">
-            ดูและเข้าร่วมกิจกรรมที่เพื่อนในชั้นปีจัดขึ้น
-          </p>
-          <Link href="/events-list">
-            <button className="w-full bg-green-500 text-white py-2 rounded-xl hover:bg-green-600 transition-colors">
+          {/* Card 3: กิจกรรมที่กำลังมา */}
+          <div className="bg-white dark:bg-gray-900/70 rounded-2xl shadow-lg border border-white/60 dark:border-gray-700 p-6 flex flex-col justify-between">
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+                กิจกรรมที่กำลังมา
+              </h2>
+              <p className="mt-6 text-gray-600 dark:text-gray-300">
+                ดูและเข้าร่วมกิจกรรมที่เพื่อนในชั้นปีจัดขึ้น
+              </p>
+            </div>
+            <button
+              onClick={goUpcoming}
+              className="mt-8 w-full bg-green-600 hover:bg-green-700 text-white font-medium py-3 rounded-xl shadow transition"
+            >
               ดูกิจกรรม
             </button>
-          </Link>
+          </div>
         </div>
       </main>
 
-      {/* Footer */}
       <Footer />
     </div>
   );

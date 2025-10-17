@@ -1,138 +1,99 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
+import ParticipantsList from "../components/ParticipantsList";
+import toast from "react-hot-toast";
+import { safeGet, safeAppendList } from "../utils/storage";
 
 export default function MyEvents() {
   const router = useRouter();
-  const [joinedEvents, setJoinedEvents] = useState([]);
-  const [userProfile, setUserProfile] = useState(null);
+  const [user, setUser] = useState(null);
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  // โหลดผู้ใช้ปัจจุบัน
   useEffect(() => {
-    const savedUser = JSON.parse(localStorage.getItem("userProfile")) || {
-      id: 101,
-      name: "คุณสมชาย ใจดี",
-      avatar: null,
-    };
-    setUserProfile(savedUser);
-  }, []);
+    (async () => {
+      const u = await safeGet("userProfile", null);
+      if (!u) { toast.error("กรุณาเข้าสู่ระบบ"); router.push("/login"); return; }
+      setUser(u);
+      setEvents(await safeGet("events", []));
+      setLoading(false);
+    })();
+  }, [router]);
 
-  // โหลดกิจกรรมที่เข้าร่วม
-  useEffect(() => {
-    if (!userProfile) return;
-    const savedEvents = JSON.parse(localStorage.getItem("events") || "[]");
-    const joined = savedEvents.filter((event) =>
-      event.participants?.find((u) => u.id === userProfile.id)
-    );
-    setJoinedEvents(joined);
-  }, [userProfile]);
-
-  // ยกเลิกเข้าร่วมกิจกรรม
-  const handleCancel = (eventId) => {
-    const updatedEvents = joinedEvents.map((event) => {
-      if (event.id === eventId) {
-        event.participants = event.participants.filter(
-          (u) => u.id !== userProfile.id
-        );
-      }
-      return event;
-    });
-
-    // อัปเดตกิจกรรมทั้งหมดใน localStorage
-    const allEvents = JSON.parse(localStorage.getItem("events") || "[]");
-    const newAllEvents = allEvents.map((event) => {
-      const updated = updatedEvents.find((e) => e.id === event.id);
-      return updated || event;
-    });
-    localStorage.setItem("events", JSON.stringify(newAllEvents));
-
-    // อัปเดตหน้า
-    const newJoined = updatedEvents.filter((e) =>
-      e.participants?.find((u) => u.id === userProfile.id)
-    );
-    setJoinedEvents(newJoined);
-    alert("คุณได้ยกเลิกเข้าร่วมกิจกรรมแล้ว");
+  const persist = async (list) => {
+    const ok = await safeAppendList("events", list, 0.5);
+    if (!ok) return toast.error("บันทึกไม่สำเร็จ");
+    setEvents(list);
   };
 
-  // ไปหน้าแชท
-  const handleChat = (eventId) => {
-    router.push(`/event-chat/${eventId}`);
+  const myJoined = useMemo(() => {
+    if (!user) return [];
+    return (events || []).filter(
+      (e) =>
+        String(e.creator?.id) === String(user.id) ||
+        (e.participants || []).some((p) => String(p.id) === String(user.id))
+    );
+  }, [events, user]);
+
+  const leaveEvent = async (eventId) => {
+    const es = await safeGet("events", []);
+    const idx = es.findIndex((e) => String(e.id) === String(eventId));
+    if (idx === -1) return;
+    if (String(es[idx].creator?.id) === String(user.id)) return toast.error("ผู้สร้างไม่สามารถยกเลิกได้");
+    if (!confirm("ต้องการยกเลิกการเข้าร่วมกิจกรรมนี้หรือไม่?")) return;
+
+    es[idx].participants = (es[idx].participants || []).filter((p) => String(p.id) !== String(user.id));
+    await persist(es);
+    toast.success("ยกเลิกกิจกรรมแล้ว");
   };
+
+  const goToChat = (eventId) => {
+    localStorage.setItem("currentChatEventId", String(eventId));
+    router.push("/event-chat");
+  };
+
+  const myId = user?.id;
 
   return (
-    <div className="min-h-screen flex flex-col bg-gradient-to-b from-blue-50 to-white">
+    <div className="min-h-screen flex flex-col bg-gray-50 dark:bg-gray-900 transition-colors">
       <Navbar />
-
-      <main className="flex-1 px-6 sm:px-20 py-10">
-        <h1 className="text-3xl font-bold text-blue-700 mb-6">
-          กิจกรรมที่ฉันเข้าร่วม
-        </h1>
-
-        {joinedEvents.length === 0 ? (
-          <p className="text-gray-500">คุณยังไม่ได้เข้าร่วมกิจกรรมใด</p>
+      <main className="flex-1 p-6 max-w-4xl mx-auto w-full">
+        <h1 className="text-3xl font-bold mb-6 text-gray-900 dark:text-gray-100">กิจกรรมของฉัน</h1>
+        {loading ? (
+          <p className="text-gray-700 dark:text-gray-300">กำลังโหลดข้อมูล...</p>
+        ) : myJoined.length === 0 ? (
+          <p className="text-gray-700 dark:text-gray-300">ยังไม่มีกิจกรรมที่เข้าร่วม</p>
         ) : (
-          <div className="grid gap-6 md:grid-cols-2">
-            {joinedEvents.map((event) => (
-              <div
-                key={event.id}
-                className="bg-white shadow-lg rounded-2xl p-6 hover:shadow-xl transition-shadow"
-              >
-                <h2 className="text-xl font-semibold text-orange-600 mb-2">
-                  {event.title}
-                </h2>
-                <p className="text-gray-600 mb-2">{event.description}</p>
-                <p className="text-sm text-gray-500 mb-2">
-                  📅 {event.date} ⏰ {event.time} | 📍 {event.location}
-                </p>
-
-                {/* ผู้สร้าง */}
-                <div className="flex items-center gap-2 mb-2">
-                  {event.creator?.avatar ? (
-                    <img
-                      src={event.creator.avatar}
-                      alt="avatar"
-                      className="w-6 h-6 rounded-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-6 h-6 rounded-full bg-gray-300"></div>
-                  )}
-                  <span className="text-gray-600">
-                    👤 ผู้สร้าง: {event.creator?.name || "ไม่ระบุ"}
-                  </span>
+          <div className="grid md:grid-cols-2 gap-4">
+            {myJoined.map((e) => {
+              const isCreator = String(e.creator?.id) === String(myId);
+              const joined = (e.participants || []).some((p) => String(p.id) === String(myId));
+              return (
+                <div key={e.id} className="border rounded-xl p-4 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition">
+                  <h2 className="text-xl font-semibold text-green-700 dark:text-green-400">{e.title}</h2>
+                  <p className="text-gray-700 dark:text-gray-200 mt-1 line-clamp-3">{e.description}</p>
+                  <div className="text-sm text-gray-700 dark:text-gray-300 mt-2 space-y-1">
+                    <div>📅 {e.date} ⏰ {e.time}</div>
+                    <div>📍 {e.location}</div>
+                    <div>ผู้สร้าง: <span className="font-medium text-gray-900 dark:text-gray-100">{e.creator?.name || "ไม่ระบุ"}</span></div>
+                    <div className="mt-1">ผู้เข้าร่วม: {(e.participants || []).length} คน<ParticipantsList participants={e.participants || []} /></div>
+                  </div>
+                  <div className="flex gap-2 mt-4">
+                    {!isCreator && joined && (
+                      <button onClick={() => leaveEvent(e.id)} className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg transition">ยกเลิก</button>
+                    )}
+                    {(joined || isCreator) && (
+                      <button onClick={() => goToChat(e.id)} className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg transition">💬 เข้าแชท</button>
+                    )}
+                  </div>
                 </div>
-
-                <p className="text-gray-600 mb-2">
-                  👥 จำนวนผู้เข้าร่วม: {event.participants?.length || 0} คน
-                </p>
-                {event.participants && event.participants.length > 0 && (
-                  <p className="text-gray-500 mb-2">
-                    รายชื่อผู้เข้าร่วม:{" "}
-                    {event.participants.map((u) => u.name).join(", ")}
-                  </p>
-                )}
-
-                <div className="flex gap-2 flex-col">
-                  <button
-                    onClick={() => handleCancel(event.id)}
-                    className="w-full bg-red-500 text-white py-2 rounded-xl hover:bg-red-600 transition-colors"
-                  >
-                    ยกเลิกเข้าร่วมกิจกรรม
-                  </button>
-
-                  <button
-                    onClick={() => handleChat(event.id)}
-                    className="w-full bg-green-500 text-white py-2 rounded-xl hover:bg-green-600 transition-colors"
-                  >
-                    💬 เข้าแชทกิจกรรม
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </main>
-
       <Footer />
     </div>
   );
