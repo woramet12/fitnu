@@ -1,67 +1,56 @@
-// pages/login.js
 import { useState } from "react";
 import { useRouter } from "next/router";
-import Link from "next/link";
-import { signInWithEmailAndPassword } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
-import { auth, db } from "../lib/firebase";
+import Link from "next/link"; // ✅ ใช้ Link แทน <a>
+import { signInWithEmailAndPassword, sendEmailVerification } from "firebase/auth";
+import { auth } from "../lib/firebase";
+import toast from "react-hot-toast";
 
 export default function Login() {
   const router = useRouter();
   const [form, setForm] = useState({ email: "", password: "" });
-  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const handleChange = (e) =>
-    setForm((s) => ({ ...s, [e.target.name]: e.target.value }));
+    setForm({ ...form, [e.target.name]: e.target.value });
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError("");
     setBusy(true);
     try {
-      const cred = await signInWithEmailAndPassword(
-        auth,
-        form.email.trim(),
-        form.password
-      );
+      const cred = await signInWithEmailAndPassword(auth, form.email, form.password);
 
-      // ถ้ายังไม่ยืนยันอีเมล → ส่งไปหน้าให้กดยืนยันก่อน
+      // ถ้ายังไม่ยืนยันอีเมล บังคับให้ไปหน้า verify
       if (!cred.user.emailVerified) {
-        router.push(`/verify-required?email=${encodeURIComponent(cred.user.email || form.email)}`);
+        try {
+          await sendEmailVerification(cred.user, {
+            url: typeof window !== "undefined" ? `${window.location.origin}/login` : undefined,
+            handleCodeInApp: false,
+          });
+        } catch {}
+        router.push(`/verify-required?email=${encodeURIComponent(form.email)}`);
         return;
       }
 
-      // โหลดโปรไฟล์จาก Firestore เก็บลง localStorage
-      const snap = await getDoc(doc(db, "users", cred.user.uid));
-      if (snap.exists()) {
-        const u = snap.data();
-        localStorage.setItem("userProfile", JSON.stringify(u));
-      } else {
-        // เผื่อไม่มีเอกสาร ก็เก็บขั้นต่ำไว้ให้ใช้งานได้
-        localStorage.setItem(
-          "userProfile",
-          JSON.stringify({
-            id: cred.user.uid,
-            email: cred.user.email,
-            name: cred.user.displayName || "",
-            avatar: cred.user.photoURL || "",
-            year: "ปี 1",
-            interest: "",
-            bio: "",
-          })
-        );
-      }
-
-      router.push("/profile");
+      // เก็บโปรไฟล์ขั้นต่ำไว้ใน localStorage (ของคุณอาจดึงจาก Firestore แล้ว merge เพิ่ม)
+      localStorage.setItem(
+        "userProfile",
+        JSON.stringify({
+          id: cred.user.uid,
+          name: cred.user.displayName || "",
+          email: cred.user.email || "",
+          avatar: cred.user.photoURL || "",
+        })
+      );
+      toast.success("เข้าสู่ระบบสำเร็จ");
+      router.push("/events-list");
     } catch (err) {
       const code = err?.code || "";
       if (code === "auth/invalid-credential" || code === "auth/wrong-password") {
-        setError("อีเมลหรือรหัสผ่านไม่ถูกต้อง");
+        toast.error("อีเมลหรือรหัสผ่านไม่ถูกต้อง");
       } else if (code === "auth/user-not-found") {
-        setError("ไม่พบบัญชีนี้");
+        toast.error("ไม่พบบัญชีผู้ใช้");
       } else {
-        setError(`เข้าสู่ระบบไม่สำเร็จ (${code || "unknown"})`);
+        toast.error(`เข้าสู่ระบบไม่สำเร็จ (${code || "unknown"})`);
       }
     } finally {
       setBusy(false);
@@ -74,8 +63,6 @@ export default function Login() {
         <h1 className="text-3xl font-bold text-center text-gray-800 mb-6">
           เข้าสู่ระบบ
         </h1>
-
-        {error && <p className="text-red-600 text-center mb-3">{error}</p>}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <input
@@ -99,21 +86,20 @@ export default function Login() {
           <button
             type="submit"
             disabled={busy}
-            className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white py-2 rounded-lg"
+            className="w-full bg-blue-600 text-white py-2 rounded-lg disabled:opacity-60"
           >
             {busy ? "กำลังเข้าสู่ระบบ..." : "เข้าสู่ระบบ"}
           </button>
         </form>
 
-        <div className="mt-4 text-center text-gray-600 space-y-2">
-          {/* เปลี่ยนเป็น Link แทน a */}
+        <div className="mt-4 text-center space-y-1">
+          {/* 🔁 ใช้ Link แทน a */}
           <div>
-            ลืมรหัสผ่าน?{" "}
             <Link href="/reset-password" className="text-blue-600 hover:underline">
-              กดที่นี่
+              ลืมรหัสผ่าน?
             </Link>
           </div>
-          <div>
+          <div className="text-gray-600">
             ยังไม่มีบัญชี?{" "}
             <Link href="/register" className="text-blue-600 hover:underline">
               สมัครสมาชิก
