@@ -32,14 +32,21 @@ export default function MyEvents() {
     }
     setUser(u);
 
-    const q1 = query(collection(db, "events"), where("creator.id", "==", String(u.id)));
-    const q2 = query(collection(db, "events"), where("participantIds", "array-contains", String(u.id)));
+    const q1 = query(
+      collection(db, "events"),
+      where("creator.id", "==", String(u.id))
+    );
+    const q2 = query(
+      collection(db, "events"),
+      where("participantIds", "array-contains", String(u.id))
+    );
 
     const unsub1 = onSnapshot(
       q1,
       (snap) => setMineCreated(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
       () => toast.error("โหลดข้อมูลไม่สำเร็จ")
     );
+
     const unsub2 = onSnapshot(
       q2,
       (snap) => setMineJoined(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
@@ -48,17 +55,21 @@ export default function MyEvents() {
 
     setLoading(false);
 
-    // ✅ ใช้ if ชัดๆ (ไม่ใช้ short-circuit)
+    // ✅ ห้ามใช้รูปแบบ short-circuit (unsub1 && unsub1())
+    // ใช้ตัวแปรสำเนา + if แบบนี้ จะไม่โดน @typescript-eslint/no-unused-expressions
     return () => {
-      if (typeof unsub1 === "function") { unsub1(); }
-      if (typeof unsub2 === "function") { unsub2(); }
+      const u1 = unsub1;
+      const u2 = unsub2;
+      if (typeof u1 === "function") u1();
+      if (typeof u2 === "function") u2();
     };
   }, [router]);
 
+  // รวมกิจกรรม: ที่สร้างเอง + ที่เข้าร่วม (ตัดซ้ำ)
   const allMine = useMemo(() => {
     const map = new Map();
-    for (const e of mineCreated) map.set(String(e.id), e);
-    for (const e of mineJoined) map.set(String(e.id), e);
+    for (const item of mineCreated) map.set(String(item.id), item);
+    for (const item of mineJoined) map.set(String(item.id), item);
     return Array.from(map.values()).sort(
       (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0)
     );
@@ -66,6 +77,7 @@ export default function MyEvents() {
 
   const myId = user?.id ? String(user.id) : null;
 
+  // ออกจากกิจกรรม
   const leaveEvent = async (eventId) => {
     if (!myId) return;
     if (!confirm("ต้องการยกเลิกการเข้าร่วมกิจกรรมนี้หรือไม่?")) return;
@@ -104,7 +116,9 @@ export default function MyEvents() {
         {loading ? (
           <p className="text-gray-700 dark:text-gray-300">กำลังโหลดข้อมูล...</p>
         ) : allMine.length === 0 ? (
-          <p className="text-gray-700 dark:text-gray-300">ยังไม่มีกิจกรรมที่เกี่ยวข้องกับคุณ</p>
+          <p className="text-gray-700 dark:text-gray-300">
+            ยังไม่มีกิจกรรมที่เกี่ยวข้องกับคุณ
+          </p>
         ) : (
           <div className="grid md:grid-cols-2 gap-4">
             {allMine.map((e) => {
@@ -118,11 +132,17 @@ export default function MyEvents() {
                   key={e.id}
                   className="border rounded-xl p-4 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition"
                 >
-                  <h2 className="text-xl font-semibold text-green-700 dark:text-green-400">{e.title}</h2>
-                  <p className="text-gray-700 dark:text-gray-200 mt-1 line-clamp-3">{e.description}</p>
+                  <h2 className="text-xl font-semibold text-green-700 dark:text-green-400">
+                    {e.title}
+                  </h2>
+                  <p className="text-gray-700 dark:text-gray-200 mt-1 line-clamp-3">
+                    {e.description}
+                  </p>
 
                   <div className="text-sm text-gray-700 dark:text-gray-300 mt-2 space-y-1">
-                    <div>📅 {e.date} ⏰ {e.time}</div>
+                    <div>
+                      📅 {e.date} ⏰ {e.time}
+                    </div>
                     <div>📍 {e.location}</div>
                     <div>
                       ผู้สร้าง:{" "}
@@ -132,13 +152,20 @@ export default function MyEvents() {
                     </div>
                     <div className="mt-1">
                       ผู้เข้าร่วม:{" "}
-                      {Array.isArray(e?.participantIds) ? e.participantIds.length : (e.participants || []).length} คน
+                      {Array.isArray(e?.participantIds)
+                        ? e.participantIds.length
+                        : (e.participants || []).length}{" "}
+                      คน
                       <div className="mt-1">
                         <ParticipantsList
                           participants={
                             e.participants ||
                             (Array.isArray(e.participantIds)
-                              ? e.participantIds.map((pid) => ({ id: pid, name: "ผู้ใช้", avatar: "" }))
+                              ? e.participantIds.map((pid) => ({
+                                  id: pid,
+                                  name: "ผู้ใช้",
+                                  avatar: "",
+                                }))
                               : [])
                           }
                         />
