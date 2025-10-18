@@ -5,7 +5,6 @@ import Footer from "../components/Footer";
 import ParticipantsList from "../components/ParticipantsList";
 import toast from "react-hot-toast";
 
-// Firestore
 import {
   collection,
   query,
@@ -20,11 +19,10 @@ import { db } from "../lib/firebase";
 export default function MyEvents() {
   const router = useRouter();
   const [user, setUser] = useState(null);
-  const [mineCreated, setMineCreated] = useState([]);      // events ที่เราสร้าง
-  const [mineJoined, setMineJoined] = useState([]);        // events ที่เราร่วม
+  const [mineCreated, setMineCreated] = useState([]);
+  const [mineJoined, setMineJoined] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // โหลด session user + subscribe ข้อมูล
   useEffect(() => {
     const u = JSON.parse(localStorage.getItem("userProfile") || "null");
     if (!u) {
@@ -34,46 +32,29 @@ export default function MyEvents() {
     }
     setUser(u);
 
-    // query 1: เจ้าของกิจกรรม
-    const q1 = query(
-      collection(db, "events"),
-      where("creator.id", "==", String(u.id))
-    );
-
-    // query 2: ผู้เข้าร่วม (ต้องมี field participantIds: string[])
-    const q2 = query(
-      collection(db, "events"),
-      where("participantIds", "array-contains", String(u.id))
-    );
+    const q1 = query(collection(db, "events"), where("creator.id", "==", String(u.id)));
+    const q2 = query(collection(db, "events"), where("participantIds", "array-contains", String(u.id)));
 
     const unsub1 = onSnapshot(
       q1,
-      (snap) => {
-        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        setMineCreated(rows);
-      },
+      (snap) => setMineCreated(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
       () => toast.error("โหลดข้อมูลไม่สำเร็จ")
     );
-
     const unsub2 = onSnapshot(
       q2,
-      (snap) => {
-        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        setMineJoined(rows);
-      },
+      (snap) => setMineJoined(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
       () => toast.error("โหลดข้อมูลไม่สำเร็จ")
     );
 
     setLoading(false);
 
-    // ✅ แก้รูปแบบ cleanup ให้ผ่าน ESLint
+    // ✅ ใช้ if แทน short-circuit เพื่อไม่ให้ ESLint ฟ้อง
     return () => {
       if (typeof unsub1 === "function") unsub1();
       if (typeof unsub2 === "function") unsub2();
     };
   }, [router]);
 
-  // รวม “กิจกรรมของฉัน” = ที่สร้างเอง + ที่เข้าร่วม (dedupe ตาม id)
   const allMine = useMemo(() => {
     const map = new Map();
     for (const e of mineCreated) map.set(String(e.id), e);
@@ -85,7 +66,6 @@ export default function MyEvents() {
 
   const myId = user?.id ? String(user.id) : null;
 
-  // ออกจากกิจกรรม (เฉพาะกรณีที่เราไม่ใช่ creator)
   const leaveEvent = async (eventId) => {
     if (!myId) return;
     if (!confirm("ต้องการยกเลิกการเข้าร่วมกิจกรรมนี้หรือไม่?")) return;
@@ -94,7 +74,7 @@ export default function MyEvents() {
         participantIds: arrayRemove(myId),
       });
       toast.success("ยกเลิกกิจกรรมแล้ว");
-    } catch (e) {
+    } catch {
       toast.error("ยกเลิกไม่สำเร็จ");
     }
   };
@@ -124,9 +104,7 @@ export default function MyEvents() {
         {loading ? (
           <p className="text-gray-700 dark:text-gray-300">กำลังโหลดข้อมูล...</p>
         ) : allMine.length === 0 ? (
-          <p className="text-gray-700 dark:text-gray-300">
-            ยังไม่มีกิจกรรมที่เกี่ยวข้องกับคุณ
-          </p>
+          <p className="text-gray-700 dark:text-gray-300">ยังไม่มีกิจกรรมที่เกี่ยวข้องกับคุณ</p>
         ) : (
           <div className="grid md:grid-cols-2 gap-4">
             {allMine.map((e) => {
@@ -140,17 +118,11 @@ export default function MyEvents() {
                   key={e.id}
                   className="border rounded-xl p-4 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition"
                 >
-                  <h2 className="text-xl font-semibold text-green-700 dark:text-green-400">
-                    {e.title}
-                  </h2>
-                  <p className="text-gray-700 dark:text-gray-200 mt-1 line-clamp-3">
-                    {e.description}
-                  </p>
+                  <h2 className="text-xl font-semibold text-green-700 dark:text-green-400">{e.title}</h2>
+                  <p className="text-gray-700 dark:text-gray-200 mt-1 line-clamp-3">{e.description}</p>
 
                   <div className="text-sm text-gray-700 dark:text-gray-300 mt-2 space-y-1">
-                    <div>
-                      📅 {e.date} ⏰ {e.time}
-                    </div>
+                    <div>📅 {e.date} ⏰ {e.time}</div>
                     <div>📍 {e.location}</div>
                     <div>
                       ผู้สร้าง:{" "}
@@ -160,20 +132,13 @@ export default function MyEvents() {
                     </div>
                     <div className="mt-1">
                       ผู้เข้าร่วม:{" "}
-                      {Array.isArray(e?.participantIds)
-                        ? e.participantIds.length
-                        : (e.participants || []).length}{" "}
-                      คน
+                      {Array.isArray(e?.participantIds) ? e.participantIds.length : (e.participants || []).length} คน
                       <div className="mt-1">
                         <ParticipantsList
                           participants={
                             e.participants ||
                             (Array.isArray(e.participantIds)
-                              ? e.participantIds.map((pid) => ({
-                                  id: pid,
-                                  name: "ผู้ใช้",
-                                  avatar: "",
-                                }))
+                              ? e.participantIds.map((pid) => ({ id: pid, name: "ผู้ใช้", avatar: "" }))
                               : [])
                           }
                         />
