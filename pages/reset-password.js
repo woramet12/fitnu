@@ -1,38 +1,57 @@
 import { useState } from "react";
+import Link from "next/link";
 import { sendPasswordResetEmail } from "firebase/auth";
 import { auth } from "../lib/firebase";
 
 export default function ResetPassword() {
   const [email, setEmail] = useState("");
   const [msg, setMsg] = useState("");
-  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const submit = async (e) => {
     e.preventDefault();
-    setMsg(""); setErr("");
+    setMsg("");
+    if (!email.trim()) return;
+
+    setBusy(true);
     try {
-      await sendPasswordResetEmail(auth, email.trim());
-      setMsg("ส่งอีเมลสำหรับรีเซ็ตรหัสผ่านแล้ว กรุณาตรวจสอบกล่องจดหมายของคุณ");
-    } catch (error) {
-      const code = error?.code || "";
-      if (code === "auth/user-not-found") setErr("ไม่พบบัญชีอีเมลนี้ในระบบ");
-      else if (code === "auth/invalid-email") setErr("รูปแบบอีเมลไม่ถูกต้อง");
-      else setErr(`ไม่สามารถส่งอีเมลได้ (${code || "ไม่ทราบสาเหตุ"})`);
+      await sendPasswordResetEmail(auth, email.trim().toLowerCase());
+      setMsg("ส่งอีเมลสำหรับรีเซ็ตรหัสผ่านแล้ว กรุณาตรวจอีเมลของคุณ");
+    } catch (err) {
+      setMsg(`ส่งอีเมลไม่สำเร็จ (${err?.code || "unknown"})`);
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-100">
+    <div className="min-h-screen flex items-center justify-center bg-blue-50">
       <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
-        <h1 className="text-2xl font-bold text-center mb-6">ลืมรหัสผ่าน</h1>
-        {msg && <p className="text-green-700 text-center mb-3">{msg}</p>}
-        {err && <p className="text-red-600 text-center mb-3">{err}</p>}
+        <h1 className="text-2xl font-bold mb-4 text-gray-800">ลืมรหัสผ่าน</h1>
         <form onSubmit={submit} className="space-y-4">
-          <input type="email" value={email} onChange={(e)=>setEmail(e.target.value)} placeholder="กรอกอีเมลที่ใช้สมัคร" className="w-full px-4 py-2 border rounded-lg" />
-          <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded-lg">ส่งลิงก์รีเซ็ต</button>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="อีเมลมหาวิทยาลัยของคุณ"
+            className="w-full px-4 py-2 border rounded-lg"
+            required
+          />
+          <button
+            type="submit"
+            disabled={busy}
+            className="w-full bg-blue-600 text-white py-2 rounded-lg disabled:opacity-60"
+          >
+            {busy ? "กำลังส่ง..." : "ส่งลิงก์รีเซ็ตรหัสผ่าน"}
+          </button>
         </form>
-        <p className="mt-4 text-center">
-          <a href="/login" className="text-blue-600 hover:underline">กลับไปหน้าเข้าสู่ระบบ</a>
+
+        {msg && <p className="mt-4 text-center text-gray-700">{msg}</p>}
+
+        <p className="mt-4 text-center text-gray-600">
+          <Link href="/login" className="text-blue-600 hover:underline">
+            กลับไปหน้าเข้าสู่ระบบ
+          </Link>
         </p>
       </div>
     </div>
