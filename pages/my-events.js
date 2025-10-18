@@ -1,31 +1,30 @@
-// pages/my-events.js
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 import ParticipantsList from "../components/ParticipantsList";
 import toast from "react-hot-toast";
-import { db } from "../lib/firebase";
+
+// Firestore
 import {
   collection,
-  doc,
-  getDoc,
-  onSnapshot,
   query,
   where,
+  onSnapshot,
+  doc,
+  updateDoc,
+  arrayRemove,
 } from "firebase/firestore";
+import { db } from "../lib/firebase";
 
 export default function MyEvents() {
   const router = useRouter();
   const [user, setUser] = useState(null);
-  const [created, setCreated] = useState([]);
-  const [joined, setJoined] = useState([]);
+  const [mineCreated, setMineCreated] = useState([]);      // events ที่เราสร้าง
+  const [mineJoined, setMineJoined] = useState([]);        // events ที่เราร่วม
   const [loading, setLoading] = useState(true);
 
-  // cache สถานะ user ที่ยังอยู่/ถูกลบแล้ว
-  const userAliveCache = useRef(new Map()); // id -> boolean
-  const [activeMap, setActiveMap] = useState({}); // eventId -> filtered participants
-
+  // โหลด session user + subscribe ข้อมูล
   useEffect(() => {
     const u = JSON.parse(localStorage.getItem("userProfile") || "null");
     if (!u) {
@@ -35,100 +34,84 @@ export default function MyEvents() {
     }
     setUser(u);
 
-    // NOTE: เลี่ยง orderBy ใน query ที่มี where(...) เพื่อตัดปัญหา composite index / SDK bug
-    let unsub1 = () => {};
-    let unsub2 = () => {};
+    // query 1: เจ้าของกิจกรรม
+    const q1 = query(
+      collection(db, "events"),
+      where("creator.id", "==", String(u.id))
+    );
 
-    try {
-      // events ที่เราเป็น creator
-      const q1 = query(
-        collection(db, "events"),
-        where("creator.id", "==", String(u.id))
-        // (ไม่ใส่ orderBy ที่นี่)
-      );
-      unsub1 = onSnapshot(
-        q1,
-        (snap) => setCreated(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
-        (err) => {
-          console.error("creator onSnapshot error:", err);
-          setCreated([]);
-        }
-      );
+    // query 2: ผู้เข้าร่วม (ต้องมี field participantIds: string[])
+    const q2 = query(
+      collection(db, "events"),
+      where("participantIds", "array-contains", String(u.id))
+    );
 
-      // events ที่เราเข้าร่วม (ดูจาก participantsIds)
-      const q2 = query(
-        collection(db, "events"),
-        where("participantsIds", "array-contains", String(u.id))
-        // (ไม่ใส่ orderBy ที่นี่)
-      );
-      unsub2 = onSnapshot(
-        q2,
-        (snap) => setJoined(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
-        (err) => {
-          console.error("joined onSnapshot error:", err);
-          setJoined([]);
-        }
-      );
-    } catch (e) {
-      console.error("subscribe error:", e);
-    } finally {
-      setLoading(false);
-    }
+    const unsub1 = onSnapshot(
+      q1,
+      (snap) => {
+        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setMineCreated(rows);
+      },
+      () => toast.error("โหลดข้อมูลไม่สำเร็จ")
+    );
 
+    const unsub2 = onSnapshot(
+      q2,
+      (snap) => {
+        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setMineJoined(rows);
+      },
+      () => toast.error("โหลดข้อมูลไม่สำเร็จ")
+    );
+
+    setLoading(false);
+
+    // ✅ แก้รูปแบบ cleanup ให้ผ่าน ESLint
     return () => {
-      try { unsub1 && unsub1(); } catch {}
-      try { unsub2 && unsub2(); } catch {}
+      if (typeof unsub1 === "function") unsub1();
+      if (typeof unsub2 === "function") unsub2();
     };
   }, [router]);
 
-  // รวม 2 กลุ่มเข้าด้วยกัน (unique) แล้ว sort โดย created_at desc ฝั่ง client
+  // รวม “กิจกรรมของฉัน” = ที่สร้างเอง + ที่เข้าร่วม (dedupe ตาม id)
   const allMine = useMemo(() => {
     const map = new Map();
-    [...created, ...joined].forEach((e) => map.set(e.id, e));
-    const arr = Array.from(map.values());
-    const toMillis = (v) =>
-      v && typeof v.toDate === "function"
-        ? v.toDate().getTime()
-        : v
-        ? new Date(String(v)).getTime()
-        : 0;
-    return arr.sort((a, b) => toMillis(b.created_at) - toMillis(a.created_at));
-  }, [created, joined]);
+    for (const e of mineCreated) map.set(String(e.id), e);
+    for (const e of mineJoined) map.set(String(e.id), e);
+    return Array.from(map.values()).sort(
+      (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0)
+    );
+  }, [mineCreated, mineJoined]);
 
-  // helper เช็คว่าผู้ใช้ยังอยู่ใน DB
-  const checkUserAlive = async (id) => {
-    const key = String(id);
-    if (userAliveCache.current.has(key)) return userAliveCache.current.get(key);
-    const snap = await getDoc(doc(db, "users", key));
-    const alive = snap.exists();
-    userAliveCache.current.set(key, alive);
-    return alive;
+  const myId = user?.id ? String(user.id) : null;
+
+  // ออกจากกิจกรรม (เฉพาะกรณีที่เราไม่ใช่ creator)
+  const leaveEvent = async (eventId) => {
+    if (!myId) return;
+    if (!confirm("ต้องการยกเลิกการเข้าร่วมกิจกรรมนี้หรือไม่?")) return;
+    try {
+      await updateDoc(doc(db, "events", String(eventId)), {
+        participantIds: arrayRemove(myId),
+      });
+      toast.success("ยกเลิกกิจกรรมแล้ว");
+    } catch (e) {
+      toast.error("ยกเลิกไม่สำเร็จ");
+    }
   };
-
-  // คำนวณ participants ที่ยัง active สำหรับแต่ละ event
-  useEffect(() => {
-    (async () => {
-      const out = {};
-      for (const ev of allMine) {
-        const ps = Array.isArray(ev.participants) ? ev.participants : [];
-        const filtered = [];
-        for (const p of ps) {
-          if (!p?.id) continue;
-          const alive = await checkUserAlive(p.id);
-          if (alive) filtered.push(p);
-        }
-        out[ev.id] = filtered;
-      }
-      setActiveMap(out);
-    })();
-  }, [allMine]);
 
   const goToChat = (eventId) => {
-    localStorage.setItem("currentChatEventId", String(eventId));
+    try {
+      localStorage.setItem("currentChatEventId", String(eventId));
+    } catch {
+      try {
+        sessionStorage.setItem("currentChatEventId", String(eventId));
+      } catch {
+        toast.error("ไม่สามารถเปิดแชทได้");
+        return;
+      }
+    }
     router.push("/event-chat");
   };
-
-  const myId = user?.id;
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-50 dark:bg-gray-900 transition-colors">
@@ -142,14 +125,16 @@ export default function MyEvents() {
           <p className="text-gray-700 dark:text-gray-300">กำลังโหลดข้อมูล...</p>
         ) : allMine.length === 0 ? (
           <p className="text-gray-700 dark:text-gray-300">
-            ยังไม่มีกิจกรรมที่เข้าร่วม
+            ยังไม่มีกิจกรรมที่เกี่ยวข้องกับคุณ
           </p>
         ) : (
           <div className="grid md:grid-cols-2 gap-4">
             {allMine.map((e) => {
-              const isCreator = String(e?.creator?.id) === String(myId);
-              const active = activeMap[e.id] || [];
-              const joined = active.some((p) => String(p.id) === String(myId));
+              const isCreator = String(e?.creator?.id) === myId;
+              const joined = Array.isArray(e?.participantIds)
+                ? e.participantIds.includes(myId)
+                : (e?.participants || []).some((p) => String(p.id) === myId);
+
               return (
                 <div
                   key={e.id}
@@ -161,6 +146,7 @@ export default function MyEvents() {
                   <p className="text-gray-700 dark:text-gray-200 mt-1 line-clamp-3">
                     {e.description}
                   </p>
+
                   <div className="text-sm text-gray-700 dark:text-gray-300 mt-2 space-y-1">
                     <div>
                       📅 {e.date} ⏰ {e.time}
@@ -169,16 +155,41 @@ export default function MyEvents() {
                     <div>
                       ผู้สร้าง:{" "}
                       <span className="font-medium text-gray-900 dark:text-gray-100">
-                        {e?.creator?.name || "ไม่ระบุ"}
+                        {e.creator?.name || "ไม่ระบุ"}
                       </span>
                     </div>
                     <div className="mt-1">
-                      ผู้เข้าร่วม: {active.length} คน
-                      <ParticipantsList participants={active} />
+                      ผู้เข้าร่วม:{" "}
+                      {Array.isArray(e?.participantIds)
+                        ? e.participantIds.length
+                        : (e.participants || []).length}{" "}
+                      คน
+                      <div className="mt-1">
+                        <ParticipantsList
+                          participants={
+                            e.participants ||
+                            (Array.isArray(e.participantIds)
+                              ? e.participantIds.map((pid) => ({
+                                  id: pid,
+                                  name: "ผู้ใช้",
+                                  avatar: "",
+                                }))
+                              : [])
+                          }
+                        />
+                      </div>
                     </div>
                   </div>
 
                   <div className="flex gap-2 mt-4">
+                    {!isCreator && joined && (
+                      <button
+                        onClick={() => leaveEvent(e.id)}
+                        className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg transition"
+                      >
+                        ยกเลิก
+                      </button>
+                    )}
                     {(joined || isCreator) && (
                       <button
                         onClick={() => goToChat(e.id)}
