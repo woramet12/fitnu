@@ -1,55 +1,60 @@
+// pages/login.js
 import { useState } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
-import { signInWithEmailAndPassword, sendEmailVerification } from "firebase/auth";
-import { auth } from "../lib/firebase";
-import toast from "react-hot-toast";
+import { signInWithEmailAndPassword } from "firebase/auth";
+import { auth, db } from "../lib/firebase";
+import { doc, getDoc } from "firebase/firestore";
 
 export default function Login() {
   const router = useRouter();
   const [form, setForm] = useState({ email: "", password: "" });
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const handleChange = (e) =>
-    setForm({ ...form, [e.target.name]: e.target.value });
+    setForm((s) => ({ ...s, [e.target.name]: e.target.value }));
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setError("");
     setBusy(true);
     try {
-      const cred = await signInWithEmailAndPassword(auth, form.email, form.password);
+      const cred = await signInWithEmailAndPassword(
+        auth,
+        form.email.trim(),
+        form.password
+      );
 
+      // ดึงโปรไฟล์ผู้ใช้ (ถ้ามี) ไปเก็บ localStorage เพื่อใช้ใน UI
+      const snap = await getDoc(doc(db, "users", cred.user.uid));
+      const userProfile = snap.exists()
+        ? snap.data()
+        : {
+            id: cred.user.uid,
+            email: cred.user.email,
+            name: cred.user.email?.split("@")[0] || "User",
+            avatar: "",
+            year: "ปี 1",
+            interest: "",
+            bio: "",
+          };
+
+      localStorage.setItem("userProfile", JSON.stringify(userProfile));
+
+      // ถ้ายังไม่ verify email ให้เด้งไปหน้าบอกให้ยืนยัน
       if (!cred.user.emailVerified) {
-        try {
-          await sendEmailVerification(cred.user, {
-            url: typeof window !== "undefined" ? `${window.location.origin}/login` : undefined,
-            handleCodeInApp: false,
-          });
-        } catch {}
-        router.push(`/verify-required?email=${encodeURIComponent(form.email)}`);
+        router.push(`/verify-email?email=${encodeURIComponent(form.email)}`);
         return;
       }
 
-      localStorage.setItem(
-        "userProfile",
-        JSON.stringify({
-          id: cred.user.uid,
-          name: cred.user.displayName || "",
-          email: cred.user.email || "",
-          avatar: cred.user.photoURL || "",
-        })
-      );
-      toast.success("เข้าสู่ระบบสำเร็จ");
-      router.push("/events-list");
+      router.push("/profile");
     } catch (err) {
-      const code = err?.code || "";
-      if (code === "auth/invalid-credential" || code === "auth/wrong-password") {
-        toast.error("อีเมลหรือรหัสผ่านไม่ถูกต้อง");
-      } else if (code === "auth/user-not-found") {
-        toast.error("ไม่พบบัญชีผู้ใช้");
-      } else {
-        toast.error(`เข้าสู่ระบบไม่สำเร็จ (${code || "unknown"})`);
-      }
+      const msg =
+        err?.code === "auth/invalid-credential"
+          ? "อีเมลหรือรหัสผ่านไม่ถูกต้อง"
+          : err?.message || "เข้าสู่ระบบไม่สำเร็จ";
+      setError(msg);
     } finally {
       setBusy(false);
     }
@@ -61,6 +66,8 @@ export default function Login() {
         <h1 className="text-3xl font-bold text-center text-gray-800 mb-6">
           เข้าสู่ระบบ
         </h1>
+
+        {error && <p className="text-red-600 text-center mb-3">{error}</p>}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <input
@@ -84,13 +91,14 @@ export default function Login() {
           <button
             type="submit"
             disabled={busy}
-            className="w-full bg-blue-600 text-white py-2 rounded-lg disabled:opacity-60"
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg disabled:opacity-60"
           >
             {busy ? "กำลังเข้าสู่ระบบ..." : "เข้าสู่ระบบ"}
           </button>
         </form>
 
-        <div className="mt-4 text-center space-y-1">
+        <div className="mt-4 text-center space-y-2">
+          {/* ใช้ Link แทน a และตัด slash ท้ายพาธออก */}
           <Link href="/reset-password" className="text-blue-600 hover:underline">
             ลืมรหัสผ่าน?
           </Link>
