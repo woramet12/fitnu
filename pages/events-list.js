@@ -1,33 +1,45 @@
 // pages/events-list.js
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
+import toast from "react-hot-toast";
+
 import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 import ParticipantsList from "../components/ParticipantsList";
-import toast from "react-hot-toast";
-import { db } from "../lib/firebase";
+
+import { auth, db } from "../lib/firebase";
 import {
   collection,
+  doc,
+  getDoc,
   limit,
   onSnapshot,
   query,
+  updateDoc,
   where,
+  arrayUnion,
+  arrayRemove,
 } from "firebase/firestore";
 
-// แปลงคีย์เวิร์ดเป็น tokens (ต้องตรงกับที่เราสร้างไว้ตอนบันทึก)
+/** แปลงคีย์เวิร์ดเป็น tokens (ต้องตรงกับที่บันทึกไว้ใน events.tokens) */
 function normalizeTokens(input) {
   const s = String(input || "").toLowerCase();
-  const arr = s.replace(/[^\p{L}\p{N}\s]+/gu, " ").split(/\s+/).filter(Boolean);
+  const arr = s
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+
   const stripTone = (t) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const withVariant = arr.flatMap((w) =>
     w === stripTone(w) ? [w] : [w, stripTone(w)]
   );
-  // unique + limit 10 (ข้อจำกัด array-contains-any)
+
   return Array.from(new Set(withVariant)).slice(0, 10);
 }
 
 export default function EventsList() {
   const router = useRouter();
+
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [kw, setKw] = useState("");
@@ -35,7 +47,7 @@ export default function EventsList() {
 
   const unsubRef = useRef(null);
 
-  // guard login แบบเบาๆ
+  /** โหลดผู้ใช้แบบเบาๆ จาก localStorage (เพื่อโชว์ UI) + ใช้ auth.currentUser เป็นหลักตอนเขียน DB */
   useEffect(() => {
     const u = JSON.parse(localStorage.getItem("userProfile") || "null");
     if (!u) {
@@ -46,15 +58,15 @@ export default function EventsList() {
     setUser(u);
   }, [router]);
 
-  // subscribe รายการกิจกรรมตามคีย์เวิร์ด
+  /** subscribe รายการกิจกรรมตามคีย์เวิร์ด (รองรับ debounce) */
   useEffect(() => {
     if (!user) return;
 
-    // debounce 300ms
     const t = setTimeout(() => {
-      // ยกเลิกของเก่า
       if (unsubRef.current) {
-        try { unsubRef.current(); } catch {}
+        try {
+          unsubRef.current();
+        } catch {}
         unsubRef.current = null;
       }
 
@@ -68,14 +80,12 @@ export default function EventsList() {
           setLoading(false);
           return;
         }
-        // 🔍 ค้นหาด้วย tokens (แมตช์อย่างน้อย 1 token)
         qRef = query(
           collection(db, "events"),
           where("tokens", "array-contains-any", tokens),
           limit(200)
         );
       } else {
-        // รายการล่าสุด (ไม่มี orderBy เพื่อเลี่ยง composite-index; จะ sort ฝั่ง client)
         qRef = query(collection(db, "events"), limit(200));
       }
 
@@ -99,27 +109,81 @@ export default function EventsList() {
     return () => clearTimeout(t);
   }, [kw, user]);
 
-  const persistSort = useMemo(() => {
+  /** เรียงใหม่ฝั่ง client โดยใช้ created_at */
+  const sorted = useMemo(() => {
     const toMillis = (v) =>
-      v && typeof v.toDate === "function"
+      v && typeof v?.toDate === "function"
         ? v.toDate().getTime()
         : v
         ? new Date(String(v)).getTime()
         : 0;
-    // เรียงใหม่ฝั่ง client
     return [...events].sort((a, b) => toMillis(b.created_at) - toMillis(a.created_at));
   }, [events]);
 
-  const myId = user?.id;
+  /** ใช้ uid จาก auth เป็นหลัก เพื่อให้ทำงานบน Vercel ได้ชัวร์ */
+  const myId = auth.currentUser?.uid || user?.id || null;
 
+  /** ไปหน้าแชท (เวอร์ชันที่ใช้หน้า event-chat แบบรวม) */
   const goToChat = (eventId) => {
     localStorage.setItem("currentChatEventId", String(eventId));
     router.push("/event-chat");
   };
 
-  const joinEvent = async (e) => {
-    // ตรงนี้ถ้าคุณมีปุ่ม join ฝั่ง Firestore แล้วใช้อยู่เดิมก็ใช้โค้ดเดิมได้
-    toast("ใช้ปุ่มเข้าร่วมตามเดิมได้เลย");
+  /** เข้าร่วม/ยกเลิกร่วมกิจกรรม (อัปเดต participants ใน Firestore) */
+  const joinEvent = async (ev) => {
+    try {
+      const cu = auth.currentUser;
+      if (!cu) {
+        toast.error("กรุณาเข้าสู่ระบบก่อนเข้าร่วม");
+        router.push("/login");
+        return;
+      }
+
+      const uid = cu.uid;
+
+      // โหลดโปรไฟล์ล่าสุดจาก Firestore เพื่อใช้ชื่อ/รูปที่อัปเดต
+      const userSnap = await getDoc(doc(db, "users", uid));
+      const profile = userSnap.exists()
+        ? userSnap.data()
+        : { id: uid, name: cu.displayName || "ผู้ใช้", avatar: cu.photoURL || "" };
+
+      // โหลดเอกสารกิจกรรมล่าสุดก่อนอัปเดต
+      const ref = doc(db, "events", String(ev.id));
+      const snap = await getDoc(ref);
+      if (!snap.exists()) {
+        toast.error("ไม่พบกิจกรรมนี้");
+        return;
+      }
+
+      const data = snap.data();
+      const already = (data.participants || []).some(
+        (p) => String(p.id) === String(uid)
+      );
+      const pObj = {
+        id: uid,
+        name: profile.name || "",
+        avatar: profile.avatar || "",
+      };
+
+      if (already) {
+        await updateDoc(ref, { participants: arrayRemove(pObj) });
+        toast.success("ยกเลิกร่วมกิจกรรมแล้ว");
+      } else {
+        await updateDoc(ref, { participants: arrayUnion(pObj) });
+        toast.success("เข้าร่วมกิจกรรมสำเร็จ");
+      }
+    } catch (err) {
+      console.error("[JOIN ERROR]", err);
+      const msg = String(err?.code || err?.message || "");
+      if (
+        msg.includes("permission") ||
+        msg.includes("Missing or insufficient permissions")
+      ) {
+        toast.error("สิทธิ์ไม่เพียงพอ: ตรวจสอบการเข้าสู่ระบบ / Authorized Domains / Firestore Rules");
+      } else {
+        toast.error("เข้าร่วมกิจกรรมไม่สำเร็จ");
+      }
+    }
   };
 
   return (
@@ -152,11 +216,11 @@ export default function EventsList() {
           <div className="text-gray-700 dark:text-gray-300 text-center">
             กำลังโหลดข้อมูล...
           </div>
-        ) : persistSort.length === 0 ? (
-          <p className="text-gray-700 dark:text-gray-300">ไม่พบบางอย่างที่ค้นหา</p>
+        ) : sorted.length === 0 ? (
+          <p className="text-gray-700 dark:text-gray-300">ไม่พบกิจกรรมที่ตรงกับการค้นหา</p>
         ) : (
           <div className="grid md:grid-cols-2 gap-4">
-            {persistSort.map((e) => {
+            {sorted.map((e) => {
               const joined = (e.participants || []).some(
                 (p) => String(p.id) === String(myId)
               );
