@@ -1,45 +1,49 @@
 // pages/events-list.js
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
-import toast from "react-hot-toast";
-
 import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 import ParticipantsList from "../components/ParticipantsList";
+import toast from "react-hot-toast";
 
-import { auth, db } from "../lib/firebase";
 import {
   collection,
-  doc,
-  getDoc,
   limit,
   onSnapshot,
   query,
-  updateDoc,
   where,
-  arrayUnion,
-  arrayRemove,
+  doc,
+  getDoc,
+  updateDoc,
 } from "firebase/firestore";
+import { db } from "../lib/firebase";
 
-/** แปลงคีย์เวิร์ดเป็น tokens (ต้องตรงกับที่บันทึกไว้ใน events.tokens) */
+// แปลงคีย์เวิร์ดเป็น tokens (ต้องตรงกับที่เราสร้างไว้ตอนบันทึก)
 function normalizeTokens(input) {
   const s = String(input || "").toLowerCase();
-  const arr = s
-    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
-    .split(/\s+/)
-    .filter(Boolean);
-
+  const arr = s.replace(/[^\p{L}\p{N}\s]+/gu, " ").split(/\s+/).filter(Boolean);
   const stripTone = (t) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const withVariant = arr.flatMap((w) =>
     w === stripTone(w) ? [w] : [w, stripTone(w)]
   );
-
+  // unique + limit 10 (ข้อจำกัด array-contains-any)
   return Array.from(new Set(withVariant)).slice(0, 10);
 }
 
+// กันซ้ำใน participants ตาม id
+const uniqById = (arr = []) => {
+  const m = new Map();
+  for (const x of arr || []) {
+    if (!x || !x.id) continue;
+    const k = String(x.id);
+    if (!m.has(k))
+      m.set(k, { id: k, name: x.name || "ผู้ใช้", avatar: x.avatar || "" });
+  }
+  return Array.from(m.values());
+};
+
 export default function EventsList() {
   const router = useRouter();
-
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [kw, setKw] = useState("");
@@ -47,7 +51,7 @@ export default function EventsList() {
 
   const unsubRef = useRef(null);
 
-  /** โหลดผู้ใช้แบบเบาๆ จาก localStorage (เพื่อโชว์ UI) + ใช้ auth.currentUser เป็นหลักตอนเขียน DB */
+  // guard login แบบเบาๆ
   useEffect(() => {
     const u = JSON.parse(localStorage.getItem("userProfile") || "null");
     if (!u) {
@@ -58,11 +62,13 @@ export default function EventsList() {
     setUser(u);
   }, [router]);
 
-  /** subscribe รายการกิจกรรมตามคีย์เวิร์ด (รองรับ debounce) */
+  // subscribe รายการกิจกรรมตามคีย์เวิร์ด
   useEffect(() => {
     if (!user) return;
 
+    // debounce 300ms
     const t = setTimeout(() => {
+      // ยกเลิกของเก่า
       if (unsubRef.current) {
         try {
           unsubRef.current();
@@ -80,12 +86,14 @@ export default function EventsList() {
           setLoading(false);
           return;
         }
+        // 🔍 ค้นหาด้วย tokens (แมตช์อย่างน้อย 1 token)
         qRef = query(
           collection(db, "events"),
           where("tokens", "array-contains-any", tokens),
           limit(200)
         );
       } else {
+        // ไม่มี orderBy เพื่อเลี่ยง composite-index; sort ฝั่ง client
         qRef = query(collection(db, "events"), limit(200));
       }
 
@@ -109,80 +117,114 @@ export default function EventsList() {
     return () => clearTimeout(t);
   }, [kw, user]);
 
-  /** เรียงใหม่ฝั่ง client โดยใช้ created_at */
-  const sorted = useMemo(() => {
+  // sort ฝั่ง client ตามเวลาสร้าง
+  const persistSort = useMemo(() => {
     const toMillis = (v) =>
-      v && typeof v?.toDate === "function"
+      v && typeof v.toDate === "function"
         ? v.toDate().getTime()
         : v
         ? new Date(String(v)).getTime()
         : 0;
-    return [...events].sort((a, b) => toMillis(b.created_at) - toMillis(a.created_at));
+    return [...events].sort(
+      (a, b) => toMillis(b.created_at) - toMillis(a.created_at)
+    );
   }, [events]);
 
-  /** ใช้ uid จาก auth เป็นหลัก เพื่อให้ทำงานบน Vercel ได้ชัวร์ */
-  const myId = auth.currentUser?.uid || user?.id || null;
+  const myId = user?.id ? String(user.id) : null;
 
-  /** ไปหน้าแชท (เวอร์ชันที่ใช้หน้า event-chat แบบรวม) */
   const goToChat = (eventId) => {
-    localStorage.setItem("currentChatEventId", String(eventId));
+    try {
+      localStorage.setItem("currentChatEventId", String(eventId));
+    } catch {
+      try {
+        sessionStorage.setItem("currentChatEventId", String(eventId));
+      } catch {
+        toast.error("ไม่สามารถเปิดแชทได้");
+        return;
+      }
+    }
     router.push("/event-chat");
   };
 
-  /** เข้าร่วม/ยกเลิกร่วมกิจกรรม (อัปเดต participants ใน Firestore) */
+  // ✅ เข้าร่วมกิจกรรม: อ่านเอกสารล่าสุด → คำนวณอาร์เรย์ใหม่ → updateDoc (ไม่ใช้ arrayUnion)
   const joinEvent = async (ev) => {
     try {
-      const cu = auth.currentUser;
-      if (!cu) {
-        toast.error("กรุณาเข้าสู่ระบบก่อนเข้าร่วม");
+      if (!myId) {
+        toast.error("กรุณาเข้าสู่ระบบ");
         router.push("/login");
         return;
       }
 
-      const uid = cu.uid;
-
-      // โหลดโปรไฟล์ล่าสุดจาก Firestore เพื่อใช้ชื่อ/รูปที่อัปเดต
-      const userSnap = await getDoc(doc(db, "users", uid));
-      const profile = userSnap.exists()
-        ? userSnap.data()
-        : { id: uid, name: cu.displayName || "ผู้ใช้", avatar: cu.photoURL || "" };
-
-      // โหลดเอกสารกิจกรรมล่าสุดก่อนอัปเดต
       const ref = doc(db, "events", String(ev.id));
       const snap = await getDoc(ref);
       if (!snap.exists()) {
-        toast.error("ไม่พบกิจกรรมนี้");
+        toast.error("ไม่พบบันทึกกิจกรรม");
+        return;
+      }
+      const cur = snap.data();
+
+      const already =
+        (cur.participantIds || []).map(String).includes(String(myId)) ||
+        (cur.participants || []).some((p) => String(p.id) === String(myId));
+      if (already) {
+        toast("คุณเข้าร่วมแล้ว");
         return;
       }
 
-      const data = snap.data();
-      const already = (data.participants || []).some(
-        (p) => String(p.id) === String(uid)
-      );
-      const pObj = {
-        id: uid,
-        name: profile.name || "",
-        avatar: profile.avatar || "",
+      const me = {
+        id: String(myId),
+        name: user?.name || "ผู้ใช้",
+        avatar: user?.avatar || "",
       };
 
-      if (already) {
-        await updateDoc(ref, { participants: arrayRemove(pObj) });
-        toast.success("ยกเลิกร่วมกิจกรรมแล้ว");
-      } else {
-        await updateDoc(ref, { participants: arrayUnion(pObj) });
-        toast.success("เข้าร่วมกิจกรรมสำเร็จ");
+      const nextIds = Array.from(
+        new Set([...(cur.participantIds || []).map(String), String(myId)])
+      );
+      const nextParticipants = uniqById([...(cur.participants || []), me]);
+
+      await updateDoc(ref, {
+        participantIds: nextIds,
+        participants: nextParticipants,
+      });
+
+      toast.success("เข้าร่วมกิจกรรมแล้ว");
+    } catch (e) {
+      console.error(e);
+      toast.error("เข้าร่วมไม่สำเร็จ");
+    }
+  };
+
+  // ✅ ยกเลิกเข้าร่วม: อ่านเอกสารล่าสุด → กรองออก → updateDoc (ไม่ใช้ arrayRemove)
+  const cancelJoin = async (ev) => {
+    try {
+      if (!myId) return;
+      const ok = confirm("ต้องการยกเลิกการเข้าร่วมกิจกรรมนี้หรือไม่?");
+      if (!ok) return;
+
+      const ref = doc(db, "events", String(ev.id));
+      const snap = await getDoc(ref);
+      if (!snap.exists()) {
+        toast.error("ไม่พบบันทึกกิจกรรม");
+        return;
       }
-    } catch (err) {
-      console.error("[JOIN ERROR]", err);
-      const msg = String(err?.code || err?.message || "");
-      if (
-        msg.includes("permission") ||
-        msg.includes("Missing or insufficient permissions")
-      ) {
-        toast.error("สิทธิ์ไม่เพียงพอ: ตรวจสอบการเข้าสู่ระบบ / Authorized Domains / Firestore Rules");
-      } else {
-        toast.error("เข้าร่วมกิจกรรมไม่สำเร็จ");
-      }
+      const cur = snap.data();
+
+      const nextIds = (cur.participantIds || [])
+        .map(String)
+        .filter((id) => id !== String(myId));
+      const nextParticipants = (cur.participants || []).filter(
+        (p) => String(p.id) !== String(myId)
+      );
+
+      await updateDoc(ref, {
+        participantIds: nextIds,
+        participants: nextParticipants,
+      });
+
+      toast.success("ยกเลิกเข้าร่วมแล้ว");
+    } catch (e) {
+      console.error(e);
+      toast.error("ยกเลิกไม่สำเร็จ");
     }
   };
 
@@ -216,15 +258,19 @@ export default function EventsList() {
           <div className="text-gray-700 dark:text-gray-300 text-center">
             กำลังโหลดข้อมูล...
           </div>
-        ) : sorted.length === 0 ? (
-          <p className="text-gray-700 dark:text-gray-300">ไม่พบกิจกรรมที่ตรงกับการค้นหา</p>
+        ) : persistSort.length === 0 ? (
+          <p className="text-gray-700 dark:text-gray-300">
+            ไม่พบบางอย่างที่ค้นหา
+          </p>
         ) : (
           <div className="grid md:grid-cols-2 gap-4">
-            {sorted.map((e) => {
-              const joined = (e.participants || []).some(
-                (p) => String(p.id) === String(myId)
-              );
-              const isCreator = String(e?.creator?.id) === String(myId);
+            {persistSort.map((e) => {
+              const isCreator = String(e?.creator?.id || "") === String(myId);
+              const joined = Array.isArray(e?.participantIds)
+                ? e.participantIds.includes(String(myId))
+                : (e?.participants || []).some(
+                    (p) => String(p.id) === String(myId)
+                  );
 
               return (
                 <div
@@ -239,7 +285,9 @@ export default function EventsList() {
                   </p>
 
                   <div className="text-sm text-gray-700 dark:text-gray-300 mt-2 space-y-1">
-                    <div>📅 {e.date} ⏰ {e.time}</div>
+                    <div>
+                      📅 {e.date} ⏰ {e.time}
+                    </div>
                     <div>📍 {e.location}</div>
                     <div>
                       ผู้สร้าง:{" "}
@@ -248,21 +296,46 @@ export default function EventsList() {
                       </span>
                     </div>
                     <div className="mt-1">
-                      ผู้เข้าร่วม: {(e.participants || []).length} คน
+                      ผู้เข้าร่วม:{" "}
+                      {Array.isArray(e?.participantIds)
+                        ? e.participantIds.length
+                        : (e?.participants || []).length}{" "}
+                      คน
                       <div className="mt-1">
-                        <ParticipantsList participants={e.participants || []} />
+                        <ParticipantsList
+                          participants={
+                            e?.participants ||
+                            (Array.isArray(e?.participantIds)
+                              ? e.participantIds.map((pid) => ({
+                                  id: pid,
+                                  name: "ผู้ใช้",
+                                  avatar: "",
+                                }))
+                              : [])
+                          }
+                        />
                       </div>
                     </div>
                   </div>
 
                   <div className="flex flex-wrap gap-2 mt-4">
-                    {(joined || isCreator) ? (
-                      <button
-                        onClick={() => goToChat(e.id)}
-                        className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg transition"
-                      >
-                        💬 แชท
-                      </button>
+                    {isCreator || joined ? (
+                      <>
+                        {!isCreator && (
+                          <button
+                            onClick={() => cancelJoin(e)}
+                            className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg transition"
+                          >
+                            ยกเลิก
+                          </button>
+                        )}
+                        <button
+                          onClick={() => goToChat(e.id)}
+                          className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg transition"
+                        >
+                          💬 แชท
+                        </button>
+                      </>
                     ) : (
                       <button
                         onClick={() => joinEvent(e)}
