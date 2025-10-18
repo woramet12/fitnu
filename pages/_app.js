@@ -7,7 +7,10 @@ import { auth, db } from "../lib/firebase";
 import { onAuthStateChanged, reload } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 
-/** อนุญาตเฉพาะ 2 เพจนี้เมื่อ "ยังไม่ล็อกอิน" */
+/** หน้า public เสมอ (ให้เข้าได้แม้จะล็อกอิน/ยังไม่ verify) */
+const ALWAYS_PUBLIC = new Set(["/login", "/register", "/verify-email"]);
+
+/** หน้า public เฉพาะ “ยังไม่ล็อกอิน” (ไม่จำเป็นแล้ว แต่เก็บไว้เผื่อใช้) */
 const PUBLIC_PATHS = new Set(["/login", "/register"]);
 
 export default function MyApp({ Component, pageProps }) {
@@ -20,8 +23,10 @@ export default function MyApp({ Component, pageProps }) {
     profile: null,
   });
 
-  const isPublic = useMemo(() => PUBLIC_PATHS.has(router.pathname || ""), [router.pathname]);
+  const path = router.pathname || "";
+  const isAlwaysPublic = useMemo(() => ALWAYS_PUBLIC.has(path), [path]);
 
+  // โหลดสถานะผู้ใช้ + โปรไฟล์
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
       try {
@@ -47,9 +52,9 @@ export default function MyApp({ Component, pageProps }) {
           avatar: profile?.avatar || u.photoURL || "",
           email: u.email || "",
           created_at: profile?.created_at || "",
-          skipVerify: !!profile?.skipVerify, // ถ้ามี true จะข้ามการบังคับยืนยันเมล
+          skipVerify: !!profile?.skipVerify,
         };
-        localStorage.setItem("userProfile", JSON.stringify(mergedProfile));
+        try { localStorage.setItem("userProfile", JSON.stringify(mergedProfile)); } catch {}
 
         setSession({
           uid: u.uid,
@@ -64,27 +69,30 @@ export default function MyApp({ Component, pageProps }) {
     return () => unsub();
   }, []);
 
-  // Guard
+  // Guard เส้นทาง
   useEffect(() => {
     if (!authReady) return;
 
     const u = session;
     const skipVerify = !!u?.profile?.skipVerify;
 
-    // ยังไม่ล็อกอิน → ไปได้เฉพาะ /login และ /register
+    // 1) ยังไม่ล็อกอิน → อนุญาตเฉพาะ /login /register
     if (!u.uid) {
-      if (!isPublic) router.replace("/login");
+      if (!PUBLIC_PATHS.has(path)) router.replace("/login");
       return;
     }
 
-    // ล็อกอินแล้วแต่ยังไม่ยืนยัน (และไม่ได้ skip) → บังคับไป /verify-email
-    if (!u.emailVerified && !skipVerify && router.pathname !== "/verify-email") {
+    // 2) ล็อกอินแล้วแต่ยังไม่ยืนยัน (และไม่ได้ skip) →
+    //    อนุญาต /login /register /verify-email เสมอ
+    //    ถ้าจะไปหน้าอื่น ให้บังคับไป /verify-email
+    if (!u.emailVerified && !skipVerify && !ALWAYS_PUBLIC.has(path)) {
       const query = u.email ? `?email=${encodeURIComponent(u.email)}` : "";
       router.replace("/verify-email" + query);
       return;
     }
-    // verified หรือ skipVerify → ผ่าน
-  }, [authReady, isPublic, router, session]);
+
+    // 3) verified หรือ skipVerify → ผ่าน
+  }, [authReady, path, router, session]);
 
   if (!authReady) {
     return (
