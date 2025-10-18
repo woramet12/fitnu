@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useRouter } from "next/router";
-import Link from "next/link"; // ✅ ใช้ Link แทน <a>
+import Link from "next/link";
 import { signInWithEmailAndPassword, sendEmailVerification } from "firebase/auth";
 import { auth } from "../lib/firebase";
 import toast from "react-hot-toast";
@@ -19,7 +19,6 @@ export default function Login() {
     try {
       const cred = await signInWithEmailAndPassword(auth, form.email, form.password);
 
-      // ถ้ายังไม่ยืนยันอีเมล บังคับให้ไปหน้า verify
       if (!cred.user.emailVerified) {
         try {
           await sendEmailVerification(cred.user, {
@@ -31,7 +30,6 @@ export default function Login() {
         return;
       }
 
-      // เก็บโปรไฟล์ขั้นต่ำไว้ใน localStorage (ของคุณอาจดึงจาก Firestore แล้ว merge เพิ่ม)
       localStorage.setItem(
         "userProfile",
         JSON.stringify({
@@ -93,12 +91,9 @@ export default function Login() {
         </form>
 
         <div className="mt-4 text-center space-y-1">
-          {/* 🔁 ใช้ Link แทน a */}
-          <div>
-            <Link href="/reset-password" className="text-blue-600 hover:underline">
-              ลืมรหัสผ่าน?
-            </Link>
-          </div>
+          <Link href="/reset-password" className="text-blue-600 hover:underline">
+            ลืมรหัสผ่าน?
+          </Link>
           <div className="text-gray-600">
             ยังไม่มีบัญชี?{" "}
             <Link href="/register" className="text-blue-600 hover:underline">
