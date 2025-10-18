@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
-import Image from "next/image";
 import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 import { uploadImageToCloudinary } from "../lib/cloudinary";
@@ -66,13 +65,7 @@ export default function Profile() {
         <h1 className="text-3xl font-bold mb-6 text-green-700 dark:text-green-400">โปรไฟล์ของฉัน</h1>
         <div className="bg-white dark:bg-gray-800 rounded-2xl shadow p-6 space-y-4">
           <div className="flex items-center gap-4">
-            <Image
-              src={form.avatar || "/default-avatar.png"}
-              alt="avatar"
-              width={80}
-              height={80}
-              className="rounded-full object-cover border"
-            />
+            <img src={form.avatar || "/default-avatar.png"} alt="avatar" className="w-20 h-20 rounded-full object-cover border" />
             <div>
               <label className="inline-block px-4 py-2 bg-green-600 text-white rounded-lg cursor-pointer">
                 {uploading ? "กำลังอัปโหลด..." : "เปลี่ยนรูปโปรไฟล์"}
@@ -80,7 +73,6 @@ export default function Profile() {
               </label>
             </div>
           </div>
-          {/* ฟอร์มเหมือนเดิมด้านล่าง */}
           <div className="grid md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm text-gray-600 dark:text-gray-300">ชื่อที่แสดง</label>

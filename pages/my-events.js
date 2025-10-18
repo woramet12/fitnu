@@ -48,10 +48,10 @@ export default function MyEvents() {
 
     setLoading(false);
 
-    // ✅ ใช้ if แทน short-circuit เพื่อไม่ให้ ESLint ฟ้อง
+    // ✅ ใช้ if ชัดๆ (ไม่ใช้ short-circuit)
     return () => {
-      if (typeof unsub1 === "function") unsub1();
-      if (typeof unsub2 === "function") unsub2();
+      if (typeof unsub1 === "function") { unsub1(); }
+      if (typeof unsub2 === "function") { unsub2(); }
     };
   }, [router]);
 
