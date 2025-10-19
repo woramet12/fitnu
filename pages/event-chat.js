@@ -194,6 +194,16 @@ export default function EventChat() {
     }
   };
 
+  // ===== Utilities: format timestamp =====
+  const fmtTime = (ts) => {
+    if (!ts) return "";
+    const d = ts?.toDate ? ts.toDate() : new Date(ts);
+    if (Number.isNaN(d.getTime())) return "";
+    const time = d.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" });
+    const date = d.toLocaleDateString("th-TH", { year: "numeric", month: "2-digit", day: "2-digit" });
+    return `${time} • ${date}`;
+  };
+
   if (!user || !eventObj) {
     return (
       <div className="min-h-screen flex flex-col">
@@ -232,18 +242,17 @@ export default function EventChat() {
             ) : (
               messages.map((m) => {
                 const mine = String(m?.user?.id) === myId;
-                const bubbleBase =
-                  "max-w-[75%] rounded-2xl px-3 py-2 break-words";
+                const bubbleBase = "max-w-[75%] rounded-2xl px-3 py-2 break-words";
                 const bubbleClass = mine
                   ? "bg-green-600 text-white"
                   : "bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700";
 
+                const tsText = m?.created_at ? fmtTime(m.created_at) : "กำลังส่ง…";
+
                 return (
                   <div
                     key={m.id}
-                    className={`flex items-start gap-3 ${
-                      mine ? "flex-row-reverse" : ""
-                    }`}
+                    className={`flex items-start gap-3 ${mine ? "flex-row-reverse" : ""}`}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
@@ -272,6 +281,15 @@ export default function EventChat() {
                       ) : (
                         <div className="text-sm">{m.text}</div>
                       )}
+
+                      {/* เวลา/วันที่ส่ง */}
+                      <div
+                        className={`mt-1 text-[10px] ${
+                          mine ? "text-white/80 text-right" : "text-gray-500 dark:text-gray-400 text-right"
+                        }`}
+                      >
+                        {tsText}
+                      </div>
                     </div>
                   </div>
                 );
