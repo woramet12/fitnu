@@ -20,35 +20,49 @@ export default function Login() {
     setError("");
     setBusy(true);
     try {
+      // 1) ล็อกอิน
       const cred = await signInWithEmailAndPassword(
         auth,
         form.email.trim(),
         form.password
       );
+      const user = cred.user;
 
-      // ดึงโปรไฟล์ผู้ใช้ (ถ้ามี) ไปเก็บ localStorage เพื่อใช้ใน UI
-      const snap = await getDoc(doc(db, "users", cred.user.uid));
-      const userProfile = snap.exists()
-        ? snap.data()
-        : {
-            id: cred.user.uid,
-            email: cred.user.email,
-            name: cred.user.email?.split("@")[0] || "User",
-            avatar: "",
-            year: "ปี 1",
-            interest: "",
-            bio: "",
-          };
+      // 2) อุ่นสถานะให้ใหม่ทันที (ลดโอกาสต้องรีเฟรช)
+      try { await user.reload(); } catch {}
+      try { await user.getIdToken(true); } catch {}
 
-      localStorage.setItem("userProfile", JSON.stringify(userProfile));
+      // 3) โหลดโปรไฟล์ (ดึง skipVerify/ข้อมูล UI)
+      let profile = null;
+      try {
+        const snap = await getDoc(doc(db, "users", user.uid));
+        if (snap.exists()) profile = snap.data();
+      } catch {}
 
-      // ถ้ายังไม่ verify email ให้เด้งไปหน้าบอกให้ยืนยัน
-      if (!cred.user.emailVerified) {
-        router.push(`/verify-email?email=${encodeURIComponent(form.email)}`);
+      const mergedProfile = {
+        id: user.uid,
+        email: user.email || form.email.trim(),
+        name: profile?.name || user.email?.split("@")[0] || "User",
+        avatar: profile?.avatar || user.photoURL || "",
+        year: profile?.year || "ปี 1",
+        interest: profile?.interest || "",
+        bio: profile?.bio || "",
+        created_at: profile?.created_at || "",
+        skipVerify: !!profile?.skipVerify,
+      };
+      try { localStorage.setItem("userProfile", JSON.stringify(mergedProfile)); } catch {}
+
+      // 4) เปิดโหมด optimistic ให้ _app.js อนุญาตชั่วคราวช่วงนำทาง
+      try { sessionStorage.setItem("justLoggedIn", "1"); } catch {}
+
+      // 5) ตัดสินใจเส้นทางปลายทางแบบเร็ว
+      if (!user.emailVerified && !mergedProfile.skipVerify) {
+        const q = user.email ? `?email=${encodeURIComponent(user.email)}` : "";
+        router.replace("/verify-email" + q, undefined, { shallow: true, scroll: false });
         return;
       }
 
-      router.push("/profile");
+      router.replace("/profile", undefined, { shallow: true, scroll: false });
     } catch (err) {
       const msg =
         err?.code === "auth/invalid-credential"
@@ -98,7 +112,6 @@ export default function Login() {
         </form>
 
         <div className="mt-4 text-center space-y-2">
-          {/* ใช้ Link แทน a และตัด slash ท้ายพาธออก */}
           <Link href="/reset-password" className="text-blue-600 hover:underline">
             ลืมรหัสผ่าน?
           </Link>
@@ -113,4 +126,3 @@ export default function Login() {
     </div>
   );
 }
-//ff

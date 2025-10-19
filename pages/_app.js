@@ -2,23 +2,22 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import "../styles/globals.css";
-
 import { Toaster } from "react-hot-toast";
 import { auth, db } from "../lib/firebase";
-import { onAuthStateChanged, reload } from "firebase/auth";
+import { onIdTokenChanged } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 
-/** หน้า public เสมอ (เข้าได้แม้จะยังไม่ล็อกอิน/ยังไม่ verify) */
+/** หน้า public เสมอ */
 const ALWAYS_PUBLIC = new Set(["/login", "/register", "/verify-email"]);
-
-/** หน้า public เมื่อ "ยังไม่ล็อกอิน" */
-const PUBLIC_PATHS = new Set(["/login", "/register"]);
+/** หน้า public เฉพาะ “ยังไม่ล็อกอิน” */
+const PUBLIC_WHEN_SIGNED_OUT = new Set(["/login", "/register"]);
 
 export default function MyApp({ Component, pageProps }) {
   const router = useRouter();
   const path = router.pathname || "";
 
   const [authReady, setAuthReady] = useState(false);
+  const [optimisticAllow, setOptimisticAllow] = useState(false); // ให้ผ่านชั่วคราว 1 ช่วงหลังล็อกอิน
   const [session, setSession] = useState({
     uid: "",
     email: "",
@@ -28,36 +27,32 @@ export default function MyApp({ Component, pageProps }) {
 
   const isAlwaysPublic = useMemo(() => ALWAYS_PUBLIC.has(path), [path]);
 
-  // ---------------------------
-  // 1) โหลดสถานะผู้ใช้ + โปรไฟล์
-  // ---------------------------
+  // เปิดโหมด optimistic ถ้าเจอธงที่ตั้งจากหน้า login
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (u) => {
+    const just = typeof window !== "undefined" && sessionStorage.getItem("justLoggedIn") === "1";
+    if (just) setOptimisticAllow(true);
+  }, []);
+
+  // ฟังการเปลี่ยนแปลงของ token/auth (ครอบคลุม login/logout/verify)
+  useEffect(() => {
+    const unsub = onIdTokenChanged(auth, async (u) => {
       try {
-        // ยังไม่ล็อกอิน
         if (!u) {
           try { localStorage.removeItem("userProfile"); } catch {}
           setSession({ uid: "", email: "", emailVerified: false, profile: null });
+          setAuthReady(true);
+          setOptimisticAllow(false); // ไม่มีผู้ใช้แล้วไม่ต้อง optimistic
           return;
         }
 
-        // รีโหลดสถานะ (กันค่า emailVerified ค้าง) + มี retry สั้นๆ
-        await reload(u).catch(() => {});
-        let verified = !!u.emailVerified;
-        if (!verified) {
-          await new Promise((r) => setTimeout(r, 1000));
-          await reload(u).catch(() => {});
-          verified = !!u.emailVerified;
-        }
-
-        // ดึงโปรไฟล์จาก Firestore (ถ้ามี)
+        // ดึงโปรไฟล์ Firestore
         let profile = null;
         try {
           const snap = await getDoc(doc(db, "users", u.uid));
           if (snap.exists()) profile = snap.data();
         } catch {}
 
-        const mergedProfile = {
+        const merged = {
           id: u.uid,
           name: profile?.name || u.displayName || "",
           year: profile?.year || "ปี 1",
@@ -66,54 +61,56 @@ export default function MyApp({ Component, pageProps }) {
           avatar: profile?.avatar || u.photoURL || "",
           email: u.email || "",
           created_at: profile?.created_at || "",
-          skipVerify: !!profile?.skipVerify, // true = ข้ามบังคับยืนยันอีเมล
+          skipVerify: !!profile?.skipVerify,
         };
-
-        try { localStorage.setItem("userProfile", JSON.stringify(mergedProfile)); } catch {}
+        try { localStorage.setItem("userProfile", JSON.stringify(merged)); } catch {}
 
         setSession({
           uid: u.uid,
           email: u.email || "",
-          emailVerified: verified,
-          profile: mergedProfile,
+          emailVerified: !!u.emailVerified,
+          profile: merged,
         });
       } finally {
         setAuthReady(true);
+        // ถ้าเราอยู่ในโหมด optimistic ให้ปิดหลังจาก auth พร้อมแล้ว 1 ครั้ง
+        if (optimisticAllow) {
+          setOptimisticAllow(false);
+          try { sessionStorage.removeItem("justLoggedIn"); } catch {}
+        }
       }
     });
-
     return () => unsub();
-  }, []);
+  }, [optimisticAllow]);
 
-  // ---------------------------
-  // 2) Guard เส้นทาง
-  // ---------------------------
+  // Guard เส้นทาง
   useEffect(() => {
     if (!authReady) return;
+
+    // ช่วง optimistic: อนุญาตไปก่อน ไม่ redirect / ไม่โชว์สปลัช
+    if (optimisticAllow) return;
 
     const u = session;
     const skipVerify = !!u?.profile?.skipVerify;
 
-    // ยังไม่ล็อกอิน → อนุญาตเฉพาะ /login /register
+    // ยังไม่ล็อกอิน → เข้าหน้าอื่นไม่ได้
     if (!u.uid) {
-      if (!PUBLIC_PATHS.has(path)) router.replace("/login");
+      if (!PUBLIC_WHEN_SIGNED_OUT.has(path)) router.replace("/login");
       return;
     }
 
-    // ล็อกอินแล้วแต่ยังไม่ verify และไม่ได้ skip → อนุญาต /login /register /verify-email เท่านั้น
+    // ล็อกอินแล้ว แต่ยังไม่ได้ verify และไม่ได้ skip → ห้ามเข้าเพจที่ไม่ public
     if (!u.emailVerified && !skipVerify && !isAlwaysPublic) {
-      const query = u.email ? `?email=${encodeURIComponent(u.email)}` : "";
-      router.replace("/verify-email" + query);
+      const q = u.email ? `?email=${encodeURIComponent(u.email)}` : "";
+      router.replace("/verify-email" + q);
       return;
     }
 
-    // ผ่านทุกเงื่อนไข → ไม่ทำอะไร (อยู่หน้าที่ผู้ใช้ตั้งใจไป)
-  }, [authReady, isAlwaysPublic, path, router, session]);
+    // อื่น ๆ ผ่าน
+  }, [authReady, isAlwaysPublic, path, router, session, optimisticAllow]);
 
-  // ---------------------------
-  // Splash ระหว่างตรวจสอบสิทธิ์
-  // ---------------------------
-  if (!authReady) {
+  // Splash เฉพาะตอนเริ่ม (ยกเว้นกำลังใช้โหมด optimistic)
+  if (!authReady && !optimisticAllow) {
     return (
       <>
         <Toaster position="top-center" />
@@ -122,7 +119,7 @@ export default function MyApp({ Component, pageProps }) {
         </div>
       </>
     );
-    }
+  }
 
   return (
     <>
